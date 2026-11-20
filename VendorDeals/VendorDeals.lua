@@ -5,21 +5,35 @@ local RESPONSE_TIMEOUT = 45
 local ITEM_TIMEOUT = 5
 
 local RESALE_ITEMS = {
+    -- Cooking supplies
     [2678] = true, -- Mild Spices
     [2692] = true, -- Hot Spices
     [3713] = true, -- Soothing Spices
+    -- Tailoring supplies
+    [2320] = true, -- Coarse Thread
+    [2321] = true, -- Fine Thread
+    [4291] = true, -- Silken Thread
+    [2324] = true, -- Bleach
+    [2604] = true, -- Red Dye
+    [6260] = true, -- Blue Dye
+    -- Blacksmithing supplies
+    [2880] = true, -- Weak Flux
+    [3466] = true, -- Strong Flux
+    -- Alchemy supplies
+    [3371] = true, -- Empty Vial
+    [3372] = true, -- Leaded Vial
 }
 local ESTIMATED_CUT_PERCENT = 5
 
 local events = CreateFrame("Frame")
 local panel, scanButton, status, previousButton, nextButton, pageText
 local toggleButton
+local selectView
 local rows = {}
 local results = {}
 local resaleResults = {}
-local showResale = false
+local view = "deals"
 local finishedAt
-local resaleButton, headers
 local page = 1
 local activeScan
 local auctionHouseOpen
@@ -84,56 +98,88 @@ local function CaptureMerchantPrices()
 end
 
 local function TrackResale(scan, itemID, quantity, buyout)
-    local source = VendorDealsMerchantPrices[itemID]
-    if not source then return end
+    if not RESALE_ITEMS[itemID] then return end
     local ask = scan.resale[itemID]
     if not ask or buyout * ask.stack < ask.buyout * quantity then
-        scan.resale[itemID] = { source = source, buyout = buyout, stack = quantity, quantity = quantity }
+        scan.resale[itemID] = { buyout = buyout, stack = quantity, quantity = quantity }
     elseif buyout * ask.stack == ask.buyout * quantity then
         ask.quantity = ask.quantity + quantity
     end
 end
 
-local function BuildResaleResults(scan)
-    local rows = {}
-    for itemID, ask in pairs(scan.resale) do
-        local source = ask.source
-        local gross = math.floor(ask.buyout * source.size / ask.stack)
-        local cut = math.ceil(gross * ESTIMATED_CUT_PERCENT / 100)
-        local profit = gross - cut - source.cost
-        if profit > 0 then
-            local key = C_AuctionHouse.GetItemKeyInfo(C_AuctionHouse.MakeItemKey(itemID))
-            local deposit
-            if key and key.isCommodity then
-                deposit = C_AuctionHouse.CalculateCommodityDeposit(itemID, 1, source.size)
+local function RefreshResaleResults()
+    resaleResults = {}
+    local snapshot = VendorDealsResaleSnapshot
+    if not snapshot then return end
+    for itemID, ask in pairs(snapshot.asks) do
+        local source = VendorDealsMerchantPrices[itemID]
+        if source then
+            local gross = math.floor(ask.buyout * source.size / ask.stack)
+            local cut = math.ceil(gross * ESTIMATED_CUT_PERCENT / 100)
+            local profit = gross - cut - source.cost
+            if profit > 0 then
+                resaleResults[#resaleResults + 1] = {
+                    name = source.name, link = source.link, quantity = ask.quantity,
+                    buyout = ask.buyout / ask.stack, vendor = source.cost, profit = profit,
+                    source = source, gross = gross, cut = cut, itemID = itemID,
+                }
             end
-            rows[#rows + 1] = {
-                name = source.name, link = source.link, quantity = ask.quantity,
-                buyout = ask.buyout / ask.stack, vendor = source.cost, profit = profit,
-                source = source, gross = gross, cut = cut, deposit = deposit, itemID = itemID,
-            }
         end
     end
-    table.sort(rows, function(a, b)
+    table.sort(resaleResults, function(a, b)
         if a.profit ~= b.profit then return a.profit > b.profit end
         return a.itemID < b.itemID
     end)
-    return rows
+end
+
+local function DataAge(timestamp)
+    local minutes = math.floor(math.max(0, GetServerTime() - timestamp) / 60)
+    if minutes < 1 then return "<1 min ago" end
+    if minutes < 60 then return ("%d min ago"):format(minutes) end
+    if minutes < 1440 then return ("%dh %02dm ago"):format(math.floor(minutes / 60), minutes % 60) end
+    return ("%dd %dh ago"):format(math.floor(minutes / 1440), math.floor(minutes / 60) % 24)
+end
+
+local function RecordedOffers()
+    local offers = {}
+    for itemID, source in pairs(VendorDealsMerchantPrices) do
+        offers[#offers + 1] = { itemID = itemID, name = source.name, link = source.link, source = source }
+    end
+    table.sort(offers, function(a, b)
+        if a.name ~= b.name then return a.name < b.name end
+        return a.itemID < b.itemID
+    end)
+    return offers
 end
 
 local function DrawPage()
-    local visible = showResale and resaleResults or results
+    local visible = results
+    if view == "resale" then
+        visible = resaleResults
+    elseif view == "offers" then
+        visible = RecordedOffers()
+        status:SetText(("%d recorded offers · Visit a trade supplier to learn prices."):format(#visible))
+    end
     local pages = math.max(1, math.ceil(#visible / PAGE_SIZE))
     page = math.min(page, pages)
     for index, row in ipairs(rows) do
         local deal = visible[(page - 1) * PAGE_SIZE + index]
         row.deal = deal
-        if deal then
+        if deal and view == "offers" then
+            local source = deal.source
+            row.name:SetText(deal.name)
+            row.quantity:SetText(source.size)
+            row.buyout:SetText(("%.2fc"):format(source.cost / source.size))
+            row.vendor:SetText(Money(source.cost))
+            row.profit:SetText(source.location)
+            row.profit:SetTextColor(1, 1, 1)
+        elseif deal then
             row.name:SetText(deal.name)
             row.quantity:SetText(deal.quantity)
-            row.buyout:SetText(showResale and ("%.2fc"):format(deal.buyout) or Money(deal.buyout))
+            row.buyout:SetText(view == "resale" and ("%.2fc"):format(deal.buyout) or Money(deal.buyout))
             row.vendor:SetText(Money(deal.vendor))
             row.profit:SetText(Money(deal.profit))
+            row.profit:SetTextColor(0.45, 1, 0.45)
         end
         row:SetShown(deal ~= nil)
     end
@@ -143,22 +189,25 @@ local function DrawPage()
 end
 
 local function DrawSummary()
-    if not finishedAt then
-        if not activeScan and showResale then
-            status:SetText("Visit a cooking supply vendor, then scan for resale opportunities.")
-        end
-        return
-    end
-    if showResale then
-        if next(VendorDealsMerchantPrices) then
-            status:SetText(("%d resale opportunities · Last scan %s · Est. %d%% cut"):format(
-                #resaleResults, finishedAt.time, ESTIMATED_CUT_PERCENT))
+    if view == "offers" then return end
+    if view == "resale" then
+        if not next(VendorDealsMerchantPrices) then
+            status:SetText("Visit a trade supplier to learn vendor prices.")
+        elseif VendorDealsResaleSnapshot then
+            status:SetText(("%d opportunities · Auction data %s · Est. %d%% cut"):format(
+                #resaleResults, DataAge(VendorDealsResaleSnapshot.seenAt), ESTIMATED_CUT_PERCENT))
         else
-            status:SetText("Visit a cooking supply vendor, then scan for resale opportunities.")
+            status:SetText("Run an Auction House scan to cache resale prices.")
         end
-    else
+    elseif finishedAt then
         status:SetText(finishedAt.summary)
+    elseif not auctionHouseOpen then
+        status:SetText("Visit the Auction House to scan for below-vendor buyouts.")
     end
+end
+
+local function SetScanStatus(message)
+    if view ~= "offers" then status:SetText(message) end
 end
 
 local function FinishScan(scan)
@@ -173,7 +222,8 @@ local function FinishScan(scan)
         return a.index < b.index
     end)
     page = 1
-    resaleResults = BuildResaleResults(scan)
+    VendorDealsResaleSnapshot = { seenAt = scan.seenAt, asks = scan.resale }
+    RefreshResaleResults()
     local time = date("%H:%M")
     local summary = ("%d deals across %d listings · Last scan %s"):format(#results, scan.total, time)
     if scan.skipped > 0 then
@@ -277,7 +327,7 @@ local function ReadBatch(scan, first)
         end
     end
     if last + 1 < scan.total then
-        status:SetText(("Checking listings… %d / %d"):format(last + 1, scan.total))
+        SetScanStatus(("Checking listings… %d / %d"):format(last + 1, scan.total))
         C_Timer.After(0, function() ReadBatch(scan, last + 1) end)
         return
     end
@@ -287,7 +337,7 @@ local function ReadBatch(scan, first)
         FinishScan(scan)
         return
     end
-    status:SetText("Waiting for vendor prices…")
+    SetScanStatus("Waiting for vendor prices…")
     C_Timer.After(ITEM_TIMEOUT, function()
         if activeScan ~= scan then return end
         for itemID in pairs(scan.pending) do
@@ -322,14 +372,14 @@ local function StartScan()
     local scan = NewScan()
     scan.waiting = true
     events:RegisterEvent("ITEM_DATA_LOAD_RESULT")
-    status:SetText("Requesting Auction House snapshot…")
+    SetScanStatus("Requesting Auction House snapshot…")
     C_AuctionHouse.ReplicateItems()
     C_Timer.After(RESPONSE_TIMEOUT, function()
         if activeScan == scan and scan.waiting then
             activeScan = nil
             events:UnregisterEvent("ITEM_DATA_LOAD_RESULT")
             UpdateScanButton()
-            status:SetText("No snapshot received. Cooldown time is unknown.")
+            SetScanStatus("No snapshot received. Cooldown time is unknown.")
         end
     end)
 end
@@ -352,11 +402,14 @@ local function Column(parent, label, x, y, width, template, justify)
     return text
 end
 
-local function CreatePanel(auctionHouse)
-    panel = CreateFrame("Frame", nil, auctionHouse, "BackdropTemplate")
+local function CreatePanel()
+    panel = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
     panel:SetFrameStrata("DIALOG")
     panel:SetSize(620, 432)
-    panel:SetPoint("CENTER")
+    local position = VendorDealsUISettings.window
+    panel:SetPoint("CENTER", UIParent, "CENTER", position and position.x or 0, position and position.y or 0)
+    panel:SetMovable(true)
+    panel:SetClampedToScreen(true)
     panel:EnableMouse(true)
     panel:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8X8",
@@ -367,6 +420,37 @@ local function CreatePanel(auctionHouse)
     panel:SetBackdropColor(0.08, 0.08, 0.08, 1)
     panel:SetBackdropBorderColor(0.6, 0.5, 0.31, 1)
     panel:Hide()
+    local dragHandle = CreateFrame("Frame", nil, panel)
+    dragHandle:SetPoint("TOPLEFT")
+    dragHandle:SetSize(152, 37)
+    dragHandle:EnableMouse(true)
+    dragHandle:RegisterForDrag("LeftButton")
+    local dragging
+    dragHandle:SetScript("OnDragStart", function()
+        dragging = true
+        panel:StartMoving()
+    end)
+    local function StopWindowDrag()
+        if not dragging then return end
+        dragging = false
+        panel:StopMovingOrSizing()
+        panel:SetUserPlaced(false)
+        local x, y = panel:GetCenter()
+        local centerX, centerY = UIParent:GetCenter()
+        if x and y and centerX and centerY then
+            VendorDealsUISettings.window = { x = x - centerX, y = y - centerY }
+        end
+    end
+    dragHandle:SetScript("OnDragStop", StopWindowDrag)
+    dragHandle:SetScript("OnHide", StopWindowDrag)
+    local ageElapsed = 0
+    panel:SetScript("OnUpdate", function(_, delta)
+        ageElapsed = ageElapsed + delta
+        if ageElapsed >= 15 then
+            ageElapsed = 0
+            if view == "resale" and not activeScan then DrawSummary() end
+        end
+    end)
 
     Column(panel, "Vendor Deals", 16, -17, 142, "GameFontNormalLarge", "LEFT")
     local close = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
@@ -374,6 +458,7 @@ local function CreatePanel(auctionHouse)
     close:SetScript("OnClick", function() panel:Hide() end)
     status = Column(panel, "Scan the Auction House for below-vendor buyouts.", 16, -53, 465, "GameFontHighlightSmall", "LEFT")
     scanButton = Button(panel, 100, "Scan", StartScan)
+    scanButton:Hide()
     scanButton:SetPoint("TOPRIGHT", -16, -45)
     local elapsed = 0
     scanButton:SetScript("OnShow", UpdateScanButton)
@@ -384,21 +469,39 @@ local function CreatePanel(auctionHouse)
             UpdateScanButton()
         end
     end)
-    resaleButton = Button(panel, 124, "Vendor Resale", function(self)
-        showResale = not showResale
+    local views = {
+        { "deals", "Below Vendor", { "Qty", "Buyout", "Vendor", "Profit" } },
+        { "resale", "Vendor Resale", { "At ask", "Ask / unit", "Bundle cost", "Net / bundle" } },
+        { "offers", "Recorded Offers", { "Bundle", "Cost / unit", "Bundle cost", "Zone" } },
+    }
+    local viewButtons, headings, headers = {}, {}, {}
+    selectView = function(key)
+        view = key
         page = 1
-        self:SetText(showResale and "Below Vendor" or "Vendor Resale")
-        headers[2]:SetText(showResale and "At ask" or "Qty")
-        headers[3]:SetText(showResale and "Ask / unit" or "Buyout")
-        headers[4]:SetText(showResale and "Bundle cost" or "Vendor")
-        headers[5]:SetText(showResale and "Net / bundle" or "Profit")
-        if not finishedAt and not activeScan and not showResale then
-            status:SetText(usingAuctionator and "Run a replicate scan in Auctionator." or "Scan the Auction House for below-vendor buyouts.")
+        for name, control in pairs(viewButtons) do
+            control:SetEnabled(name ~= view)
         end
-        if not activeScan then DrawSummary() end
+        for column, heading in ipairs(headings[key]) do
+            headers[column + 1]:SetText(heading)
+        end
+        if activeScan then
+            status:SetText("Checking Auction House listings…")
+        else
+            if not finishedAt then
+                status:SetText(usingAuctionator and "Run a replicate scan in Auctionator." or "Scan the Auction House for below-vendor buyouts.")
+            end
+            DrawSummary()
+        end
         DrawPage()
-    end)
-    resaleButton:SetPoint("TOPLEFT", 158, -11)
+    end
+    for index, spec in ipairs(views) do
+        local key, label, labels = unpack(spec)
+        headings[key] = labels
+        local button = Button(panel, 122, label, function() selectView(key) end)
+        button:SetPoint("TOPLEFT", 158 + (index - 1) * 126, -11)
+        button:SetEnabled(key ~= view)
+        viewButtons[key] = button
+    end
 
     local columns = {
         { "Item", 16, 238, "LEFT" },
@@ -408,7 +511,6 @@ local function CreatePanel(auctionHouse)
         { "Profit", 499, 105, "RIGHT" },
     }
     local fields = { "name", "quantity", "buyout", "vendor", "profit" }
-    headers = {}
     for index, spec in ipairs(columns) do
         headers[index] = Column(panel, spec[1], spec[2], -81, spec[3], "GameFontNormalSmall", spec[4])
     end
@@ -430,10 +532,18 @@ local function CreatePanel(auctionHouse)
                 local source = deal.source
                 GameTooltip:AddLine(source.vendor .. " · " .. source.location)
                 GameTooltip:AddLine(("Vendor bundle: %d for %s (%.2fc each)"):format(source.size, Money(source.cost), source.cost / source.size))
-                GameTooltip:AddLine("Vendor price seen " .. date("%Y-%m-%d", source.seenAt))
-                GameTooltip:AddLine(("Bundle at asking price: %s gross, %s estimated cut"):format(Money(deal.gross), Money(deal.cut)))
-                local deposit = deal.deposit and Money(deal.deposit) or "See the Sell tab"
-                GameTooltip:AddLine("12-hour deposit at risk: " .. deposit)
+                GameTooltip:AddLine("Vendor price recorded " .. DataAge(source.seenAt))
+                if deal.gross then
+                    GameTooltip:AddLine(("Bundle at asking price: %s gross, %s estimated cut"):format(Money(deal.gross), Money(deal.cut)))
+                    local deposit
+                    if auctionHouseOpen then
+                        local key = C_AuctionHouse.GetItemKeyInfo(C_AuctionHouse.MakeItemKey(deal.itemID))
+                        if key and key.isCommodity then
+                            deposit = C_AuctionHouse.CalculateCommodityDeposit(deal.itemID, 1, source.size)
+                        end
+                    end
+                    GameTooltip:AddLine("12-hour deposit at risk: " .. (deposit and Money(deposit) or "See the Sell tab"))
+                end
                 GameTooltip:Show()
             end
         end)
@@ -453,18 +563,101 @@ local function CreatePanel(auctionHouse)
 
 end
 
+local function TogglePanel()
+    if not panel then CreatePanel() end
+    if panel:IsShown() then
+        panel:Hide()
+        return
+    end
+    if not auctionHouseOpen then
+        selectView("resale")
+    elseif not activeScan then
+        DrawSummary()
+    end
+    panel:Show()
+end
+
+local function PositionMinimapButton(button)
+    local angle = VendorDealsUISettings.minimapAngle or -3 * math.pi / 4
+    local x, y = math.cos(angle), math.sin(angle)
+    if GetMinimapShape and GetMinimapShape() == "SQUARE" then
+        local edge = math.max(math.abs(x), math.abs(y))
+        x, y = x / edge, y / edge
+    end
+    button:ClearAllPoints()
+    button:SetPoint("CENTER", Minimap, "CENTER",
+        x * (Minimap:GetWidth() / 2 + 5), y * (Minimap:GetHeight() / 2 + 5))
+end
+
+local function MoveMinimapButton(button)
+    local centerX, centerY = Minimap:GetCenter()
+    local width, height = Minimap:GetWidth(), Minimap:GetHeight()
+    if not centerX or not centerY or width <= 0 or height <= 0 then return end
+    local cursorX, cursorY = GetCursorPosition()
+    local scale = Minimap:GetEffectiveScale()
+    local x, y = cursorX / scale - centerX, cursorY / scale - centerY
+    if x == 0 and y == 0 then return end
+    VendorDealsUISettings.minimapAngle = math.atan2(y / height, x / width)
+    PositionMinimapButton(button)
+end
+
+local function StopMinimapDrag(button)
+    button:SetScript("OnUpdate", nil)
+end
+
+local function CreateMinimapButton()
+    if not Minimap then return end
+    local button = CreateFrame("Button", "VendorDealsMinimapButton", Minimap)
+    button:SetSize(30, 30)
+    button:SetFrameStrata("HIGH")
+    button:SetFrameLevel(Minimap:GetFrameLevel() + 50)
+    button:RegisterForClicks("LeftButtonUp")
+    button:RegisterForDrag("LeftButton")
+    button:SetScript("OnDragStart", function(self)
+        GameTooltip:Hide()
+        self:SetScript("OnUpdate", MoveMinimapButton)
+    end)
+    button:SetScript("OnDragStop", StopMinimapDrag)
+    button:SetScript("OnHide", StopMinimapDrag)
+    button:SetScript("OnClick", function()
+        GameTooltip:Hide()
+        TogglePanel()
+    end)
+    button:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:SetText("Vendor Deals")
+        GameTooltip:AddLine("Click to review vendor and auction prices", 1, 1, 1)
+        GameTooltip:AddLine("Drag to move", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    button:SetScript("OnLeave", function(self)
+        if GameTooltip:IsOwned(self) then GameTooltip:Hide() end
+    end)
+    button:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight", "ADD")
+
+    local icon = button:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(18, 18)
+    icon:SetPoint("CENTER")
+    icon:SetTexture("Interface\\Icons\\INV_Misc_Coin_01")
+    local border = button:CreateTexture(nil, "OVERLAY")
+    border:SetSize(50, 50)
+    border:SetPoint("TOPLEFT")
+    border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+
+    PositionMinimapButton(button)
+    Minimap:HookScript("OnSizeChanged", function() PositionMinimapButton(button) end)
+end
+
 local function SetupAuctionHouse()
     local auctionHouse = AuctionHouseFrame
     if not auctionHouseOpen or not auctionHouse then return end
     if not toggleButton then
-        toggleButton = Button(auctionHouse, 108, "Vendor Deals", function()
-            if panel then panel:SetShown(not panel:IsShown()) end
-        end)
+        toggleButton = Button(auctionHouse, 108, "Vendor Deals", TogglePanel)
         toggleButton:SetHeight(20)
         toggleButton:SetPoint("BOTTOMRIGHT", auctionHouse, "BOTTOMRIGHT", -20, 8)
         toggleButton:SetFrameLevel(auctionHouse:GetFrameLevel() + 20)
     end
-    if not panel then CreatePanel(auctionHouse) end
+    if not panel then CreatePanel() end
     usingAuctionator = C_AddOns.IsAddOnLoaded("Auctionator")
     scanButton:SetShown(not usingAuctionator)
     UpdateScanButton()
@@ -472,7 +665,8 @@ local function SetupAuctionHouse()
         local bus = Auctionator and Auctionator.EventBus
         local scanEvents = Auctionator and Auctionator.FullScan and Auctionator.FullScan.Events
         if not (bus and bus.Register and scanEvents and scanEvents.ScanComplete) then
-            status:SetText("This Auctionator version does not expose completed full scans.")
+            SetScanStatus("This Auctionator version does not expose completed full scans.")
+            DrawPage()
             return
         end
         if not auctionatorListener then
@@ -482,7 +676,8 @@ local function SetupAuctionHouse()
                     local scan = NewScan()
                     scan.auctionatorData = data
                     scan.total = #data
-                    status:SetText("Checking Auctionator’s completed scan…")
+                    scan.seenAt = VendorDealsLastSnapshot or GetServerTime()
+                    SetScanStatus("Checking Auctionator’s completed scan…")
                     C_Timer.After(0, function() ReadBatch(scan, 0) end)
                 end,
             }
@@ -493,34 +688,40 @@ local function SetupAuctionHouse()
         end
     end
     DrawSummary()
+    DrawPage()
 end
 
 SLASH_VENDORDEALS1 = "/vendordeals"
-SlashCmdList.VENDORDEALS = function()
-    if not (AuctionHouseFrame and AuctionHouseFrame:IsShown()) then
-        print("Vendor Deals: Open the Auction House first.")
-        return
-    end
-    if not auctionHouseOpen or not panel then
-        auctionHouseOpen = true
-        SetupAuctionHouse()
-    end
-    panel:SetShown(not panel:IsShown())
-end
+SlashCmdList.VENDORDEALS = TogglePanel
 
 events:RegisterEvent("AUCTION_HOUSE_SHOW")
 events:RegisterEvent("AUCTION_HOUSE_CLOSED")
 events:RegisterEvent("REPLICATE_ITEM_LIST_UPDATE")
 events:RegisterEvent("ADDON_LOADED")
+events:RegisterEvent("PLAYER_LOGIN")
 events:RegisterEvent("MERCHANT_SHOW")
 events:RegisterEvent("MERCHANT_UPDATE")
 events:SetScript("OnEvent", function(_, event, itemID, success)
     local scan = activeScan
     if event == "ADDON_LOADED" and itemID == "VendorDeals" then
         if type(VendorDealsMerchantPrices) ~= "table" then VendorDealsMerchantPrices = {} end
+        if type(VendorDealsUISettings) ~= "table" then VendorDealsUISettings = {} end
+        local snapshot = VendorDealsResaleSnapshot
+        if type(snapshot) ~= "table" or type(snapshot.asks) ~= "table" or type(snapshot.seenAt) ~= "number" then
+            VendorDealsResaleSnapshot = nil
+        end
+        RefreshResaleResults()
         events:UnregisterEvent("ADDON_LOADED")
+    elseif event == "PLAYER_LOGIN" then
+        CreateMinimapButton()
+        events:UnregisterEvent("PLAYER_LOGIN")
     elseif event == "MERCHANT_SHOW" or event == "MERCHANT_UPDATE" then
         CaptureMerchantPrices()
+        RefreshResaleResults()
+        if panel and (view == "resale" or view == "offers") then
+            DrawSummary()
+            DrawPage()
+        end
     elseif event == "AUCTION_HOUSE_SHOW" then
         auctionHouseOpen = true
         if AuctionHouseFrame then
@@ -534,6 +735,7 @@ events:SetScript("OnEvent", function(_, event, itemID, success)
         events:UnregisterEvent("ITEM_DATA_LOAD_RESULT")
         if not panel then return end
         panel:Hide()
+        scanButton:Hide()
         status:SetText("Scan the Auction House for below-vendor buyouts.")
         DrawPage()
     elseif event == "REPLICATE_ITEM_LIST_UPDATE" then
@@ -541,6 +743,7 @@ events:SetScript("OnEvent", function(_, event, itemID, success)
         if scanButton then UpdateScanButton() end
         if auctionHouseOpen and panel and scan and scan.waiting then
             scan.waiting = false
+            scan.seenAt = VendorDealsLastSnapshot
             scan.total = C_AuctionHouse.GetNumReplicateItems()
             ReadBatch(scan, 0)
         end

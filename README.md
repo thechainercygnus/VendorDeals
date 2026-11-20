@@ -17,9 +17,12 @@ From the shared AddOns development folder, you can also run
 
 ## Use
 
-Open an Auction House and click **Vendor Deals** in the bottom-right corner,
-or type `/vendordeals`. Hover over a result to inspect the item. Buy listings
-through the normal Auction House controls.
+Open an Auction House and click **Vendor Deals** in the bottom-right corner.
+Click the coin icon on the minimap or type `/vendordeals` anywhere to review
+saved resale prices and recorded offers. Drag the window by its title or drag
+the icon around the minimap. Both positions are saved per character.
+Hover over a result to inspect the item. Buy listings through the normal
+Auction House controls.
 
 - **With Auctionator:** Run a full scan in replicate mode from Auctionator.
   Vendor Deals reads the completed scan and shares Auctionator's cooldown.
@@ -30,10 +33,16 @@ through the normal Auction House controls.
 
 ## Vendor resale
 
-Visit a cooking supply vendor that sells Mild Spices, Hot Spices, or Soothing
-Spices. Vendor Deals remembers the character's most recently seen cash price
-and bundle size for each unlimited-stock item. Then open the Auction House,
-scan as above, and choose **Vendor Resale**.
+Visit a trade supplier to learn prices for supported cooking, tailoring,
+blacksmithing, and alchemy supplies. These include spices, thread, dyes, flux,
+and vials. Vendor Deals remembers your character's most recently seen cash
+price and bundle size for each eligible unlimited-stock item.
+
+Open **Recorded Offers** in the Auction House panel to review the items you
+have found, even before scanning. Hover over an offer to see the vendor,
+location, and age of the vendor price. **Vendor Resale** combines those
+offers with asking prices from the latest completed scan. A new merchant
+offer can appear immediately if that scan contained the item.
 
 The view uses the lowest competing asking price and shows estimated profit per
 vendor bundle after a 5% cut rounded up to copper. Hover over a row for the
@@ -41,8 +50,10 @@ vendor's name and location, the bundle math, and the 12-hour commodity deposit
 when the Auction House provides it. Check the Sell tab for other deposits.
 Asking prices can change and do not indicate how often a listing sells.
 
-Both views keep the last completed scan when you close and reopen the Auction
-House during the same UI session. Check **Last scan** before acting on a price.
+Vendor Resale saves auction prices across reloads and shows their age in the
+header. Run a scan after upgrading to populate the saved prices. Below Vendor
+keeps its last results until you reload or log out. Check the age of cached
+prices before acting on them.
 In standalone mode, the Scan button counts down from the last full snapshot
 Vendor Deals observed, including across UI reloads.
 

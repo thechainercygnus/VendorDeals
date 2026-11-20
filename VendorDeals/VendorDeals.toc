@@ -1,8 +1,8 @@
 ## Interface: 16001
 ## Title: Vendor Deals
 ## Notes: Finds Auction House buyouts below their vendor sell value.
-## Version: 0.3.2
+## Version: 0.4.2
 ## OptionalDeps: Auctionator
-## SavedVariablesPerCharacter: VendorDealsMerchantPrices, VendorDealsLastSnapshot
+## SavedVariablesPerCharacter: VendorDealsMerchantPrices, VendorDealsLastSnapshot, VendorDealsResaleSnapshot, VendorDealsUISettings
 
 VendorDeals.lua
